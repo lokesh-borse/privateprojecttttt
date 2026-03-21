@@ -1,0 +1,32 @@
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brand-50: #e6f6f4;
+  --brand-100: #c7ece8;
+  --brand-200: #9ddfd8;
+  --brand-300: #71d1c7;
+  --brand-400: #49b8ae;
+  --brand-500: #239f96;
+  --brand-600: #187f78;
+  --brand-700: #12635f;
+  --brand-800: #0f4f4c;
+  --brand-900: #0b3d3b;
+}
+
+body {
+  margin: 0;
+  font-family: 'Sora', 'Segoe UI', sans-serif;
+  background:
+    radial-gradient(circle at 12% 10%, rgba(35, 159, 150, 0.22) 0%, transparent 34%),
+    radial-gradient(circle at 90% 18%, rgba(217, 119, 6, 0.18) 0%, transparent 30%),
+    linear-gradient(165deg, #f4faf9 0%, #eef4f7 40%, #f8fcfb 100%);
+  color: #10221f;
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+}
