@@ -1,4 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
+import './utils/chartDefaults.js'
 import Login from './pages/Login.jsx'
 import Register from './pages/Register.jsx'
 import ForgotPassword from './pages/ForgotPassword.jsx'
@@ -17,12 +18,16 @@ import SetMpin from './pages/SetMpin.jsx'
 import Navbar from './components/Navbar.jsx'
 import ProtectedRoute from './routes/ProtectedRoute.jsx'
 import { AuthProvider } from './context/AuthContext.jsx'
+import { ToastProvider } from './context/ToastContext.jsx'
+import { ToastContainer } from './components/ui/Toast.jsx'
 
 export default function App() {
   return (
-    <AuthProvider>
-      <Navbar />
-      <Routes>
+    <ToastProvider>
+      <AuthProvider>
+        <Navbar />
+        <ToastContainer />
+        <Routes>
         {/* Public routes */}
         <Route path="/" element={<Home />} />
         <Route path="/login" element={<Login />} />
@@ -43,7 +48,8 @@ export default function App() {
         {/* Admin routes */}
         <Route path="/admin-panel" element={<ProtectedRoute><AdminPanel /></ProtectedRoute>} />
         <Route path="/admin/user/:userId" element={<ProtectedRoute><AdminUserActivities /></ProtectedRoute>} />
-      </Routes>
-    </AuthProvider>
+        </Routes>
+      </AuthProvider>
+    </ToastProvider>
   )
 }
