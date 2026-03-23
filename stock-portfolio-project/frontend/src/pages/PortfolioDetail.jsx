@@ -538,16 +538,10 @@ export default function PortfolioDetail() {
           {/* ═══════════════════════════════════════════════════════════════
               QUICK STATS ROW
           ═══════════════════════════════════════════════════════════════ */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             {[
               { label: 'Total Invested', value: `₹${fmtINR(totals.invested)}`, color: 'brand' },
               { label: 'Current Value',  value: `₹${fmtINR(totals.current)}`,  color: 'brand' },
-              {
-                label: 'Total Gain / Loss',
-                value: `₹${fmtINR(Math.abs(totals.pnl))}`,
-                sub: fmtPct(totals.pnlPct),
-                color: hasGain ? 'gain' : 'loss',
-              },
               {
                 label: 'Best Performer',
                 value: totals.best?.symbol ?? '—',

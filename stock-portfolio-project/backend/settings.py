@@ -3,12 +3,50 @@ from pathlib import Path
 from datetime import timedelta
 
 BASE_DIR = Path(__file__).resolve().parent
-SECRET_KEY = 'dev-secret-key'
-DEBUG = True
-ALLOWED_HOSTS = ['*']
+PROJECT_DIR = BASE_DIR.parent
+
+
+def _load_env_file(path: Path) -> None:
+    """Load KEY=VALUE pairs from an env file into os.environ if missing."""
+    if not path.exists() or not path.is_file():
+        return
+
+    try:
+        for raw_line in path.read_text(encoding='utf-8').splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, value = line.split('=', 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+    except OSError:
+        # Keep startup resilient even if an env file cannot be read.
+        pass
+
+
+_load_env_file(PROJECT_DIR / '.env')
+_load_env_file(PROJECT_DIR / '.env.local')
+_load_env_file(BASE_DIR / '.env')
+_load_env_file(BASE_DIR / '.env.local')
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    return os.environ.get(name, str(default)).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'dev-secret-key')
+DEBUG = _env_bool('DJANGO_DEBUG', True)
+ALLOWED_HOSTS = [h.strip() for h in os.environ.get('DJANGO_ALLOWED_HOSTS', '*').split(',') if h.strip()]
 
 # Telegram bot token for sending OTP messages. Get yours from @BotFather.
-TELEGRAM_BOT_TOKEN = '8618338819:AAEesYmWA6dXzZjkQQHeFidiiotPhK4OY3I'
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
+
+# Gemini AI API key (used by the backend proxy endpoint)
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
+GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash').strip()
+
 
 
 INSTALLED_APPS = [

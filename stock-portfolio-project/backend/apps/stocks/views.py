@@ -5,8 +5,10 @@ from rest_framework.response import Response
 from django.db.models import Q
 from django.http import HttpResponse
 import csv
-from .models import Stock
-from .serializers import StockSerializer
+import urllib.request
+import urllib.error
+from .models import Stock, StockUniverse
+from .serializers import StockSerializer, StockUniverseSerializer
 from services.stock_service import get_live_quote, get_history, search_symbols, get_stock_profile
 
 class StockViewSet(viewsets.ModelViewSet):
@@ -56,6 +58,27 @@ def historical(request):
         return Response({'detail': 'symbol required'}, status=status.HTTP_400_BAD_REQUEST)
     data = get_history(symbol, period=period, interval=interval)
     return Response({'symbol': symbol, 'period': period, 'interval': interval, 'prices': data})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def stock_universe(request):
+    market = (request.query_params.get('market') or '').strip().upper()
+    include_inactive = (request.query_params.get('include_inactive') or '').strip() in {'1', 'true', 'True'}
+
+    qs = StockUniverse.objects.all()
+    if market in {StockUniverse.MARKET_IN, StockUniverse.MARKET_US}:
+        qs = qs.filter(market=market)
+    if not include_inactive:
+        qs = qs.filter(is_active=True)
+    qs = qs.order_by('market', 'display_order', 'symbol')
+
+    data = StockUniverseSerializer(qs, many=True).data
+    return Response({
+        'count': len(data),
+        'results': data,
+        'symbols': [row['symbol'] for row in data],
+    })
 
 
 # ─── SENTIMENT ANALYSIS ───────────────────────────────────────────────────────
@@ -225,3 +248,79 @@ def stock_summary_download(request):
     writer.writerow(['Volume', quote.get('volume', '')])
 
     return response
+
+
+# ─── GEMINI AI PROXY ──────────────────────────────────────────────────────────
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def gemini_proxy(request):
+    """
+    Proxy POST /api/stocks/gemini/ → Gemini REST API.
+    Body: { "contents": [...], "system_prompt": "..." }
+    Returns: { "reply": "..." }
+    """
+    import urllib.request
+    import json as _json
+    from django.conf import settings as _settings
+
+    api_key = getattr(_settings, 'GEMINI_API_KEY', '')
+    model_name = getattr(_settings, 'GEMINI_MODEL', 'gemini-2.5-flash')
+    if not api_key:
+        return Response({'detail': 'Gemini API key not configured on server.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    contents = request.data.get('contents', [])
+    system_prompt = request.data.get('system_prompt', '')
+
+    payload = {'contents': contents}
+    if system_prompt:
+        payload['system_instruction'] = {'parts': [{'text': system_prompt}]}
+
+    url = f'https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}'
+
+    try:
+        req = urllib.request.Request(
+            url,
+            data=_json.dumps(payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = _json.loads(resp.read().decode('utf-8'))
+
+        reply = (
+            data.get('candidates', [{}])[0]
+            .get('content', {})
+            .get('parts', [{}])[0]
+            .get('text', '')
+        )
+        if not reply:
+            return Response({'detail': 'Empty Gemini response', 'raw': data}, status=status.HTTP_502_BAD_GATEWAY)
+
+        return Response({'reply': reply})
+
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')
+        if e.code == 429:
+            retry_after = e.headers.get('Retry-After')
+            payload = {
+                'detail': 'Gemini rate limit hit. Please retry after a short delay.',
+                'error': body,
+            }
+            if retry_after:
+                payload['retry_after_seconds'] = retry_after
+            return Response(
+                payload,
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+        if e.code == 403:
+            return Response(
+                {
+                    'detail': 'Gemini request forbidden (HTTP 403). Check GEMINI_API_KEY, ensure Generative Language API is enabled, and verify API key restrictions/billing in Google AI Studio/Cloud.',
+                    'error': body,
+                },
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+        return Response({'detail': f'Gemini error (HTTP {e.code})', 'error': body}, status=status.HTTP_502_BAD_GATEWAY)
+    except Exception as e:
+        return Response({'detail': str(e)}, status=status.HTTP_502_BAD_GATEWAY)

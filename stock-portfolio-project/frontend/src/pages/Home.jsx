@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
+import api from '../api/axios.js'
+import { fetchStockUniverse } from '../api/stocks.js'
 
 // ── Inline CSS (keyframes + ticker) ──────────────────────────────────────────
 const STYLES = `
@@ -95,53 +97,87 @@ const STYLES = `
   }
 `
 
-// ── Rule-based chatbot engine ─────────────────────────────────────────────────
-const ALLOWED_TOPICS = [
-  'founder', 'market analysis', 'suggestion', 'recommendation', 'comparison',
-  'prediction', 'overview', 'risk level', 'best mutual fund',
-]
+// ── Gemini backend proxy helper ─────────────────────────────────────────────────────
+// Calls our Django backend which securely holds the Gemini API key
+async function callGeminiProxy(contents, systemPrompt) {
+  const res = await api.post('stocks/gemini/', {
+    contents,
+    system_prompt: systemPrompt,
+  })
+  return res.data.reply
+}
 
-const CHATBOT_KB = [
-  {
-    keys: ['founder', 'who made', 'who created', 'who built', 'developed by'],
-    answer: '🧑‍💻 **Founder**: This AI Stock Portfolio platform was built by a passionate team of developers and data scientists focused on democratising investment intelligence using machine learning and modern web technologies.',
-  },
-  {
-    keys: ['market analysis', 'market trend', 'market overview', 'nifty', 'sensex', 'bse', 'nse'],
-    answer: '📊 **Market Analysis**: I can help you analyse market trends — log in to explore the Nifty Cluster Analysis, Gold-Silver correlation, and your personalised portfolio EDA with sector breakdowns.',
-  },
-  {
-    keys: ['suggestion', 'suggest', 'advice', 'advise', 'recommend stock', 'recommendation', 'which stock', 'buy stock'],
-    answer: '💡 **Stock Recommendations**: After logging in, open any portfolio and click **"Recommend Stocks"** to get AI-powered suggestions of stocks in the same sector that are not yet in your portfolio.',
-  },
-  {
-    keys: ['comparison', 'compare', 'vs', 'versus', 'better than'],
-    answer: '⚖️ **Stock Comparison**: Log in and use the portfolio K-Means Clustering feature to see how stocks compare across return, volatility, and risk.',
-  },
-  {
-    keys: ['prediction', 'predict', 'forecast', 'future price', 'next price'],
-    answer: '🔮 **Price Prediction**: We support ARIMA and RNN-based time series forecasting with 1-day and 7-day horizons. Log in → Open any portfolio → Use **Time Series Forecast**. Linear Regression forecasts are shown inline per stock.',
-  },
-  {
-    keys: ['overview', 'what is', 'about', 'features', 'platform'],
-    answer: '🌟 **Platform Overview**: AI Portfolio offers:\n• Portfolio management & EDA\n• K-Means stock clustering by risk\n• ARIMA & RNN forecasting\n• Sentiment analysis on stock news\n• Portfolio growth analysis & star rating\n• Stock recommendations\n• Telegram-based password reset',
-  },
-  {
-    keys: ['risk level', 'risk', 'risky', 'safe', 'volatile', 'volatility'],
-    answer: '⚠️ **Risk Level**: The portfolio clustering feature labels each stock as **High-Risk**, **Medium-Risk**, or **Low-Risk** based on 1-year return, volatility, max drawdown, and 52-week position. Portfolio Rating gives an overall 1–5 star score.',
-  },
-  {
-    keys: ['mutual fund', 'mf', 'sip', 'index fund', 'etf', 'best fund'],
-    answer: '📈 **Best Mutual Funds**: Well-regarded categories include:\n• **Large Cap**: Mirae Asset Large Cap, Axis Bluechip\n• **Mid Cap**: Kotak Emerging Equity, HDFC Mid-Cap\n• **Index**: UTI Nifty 50, HDFC Nifty 50\n• **ELSS**: Mirae Asset Tax Saver, Axis Long Term\n\n*Always consult a SEBI-registered advisor before investing.*',
-  },
-]
+const BASE_SYSTEM_PROMPT = `You are an expert AI Stock Market Assistant embedded in a stock portfolio management app focused on Indian (NSE/BSE) and global (US) markets.
 
-function getBotReply(message) {
-  const lower = message.toLowerCase()
-  for (const entry of CHATBOT_KB) {
-    if (entry.keys.some(k => lower.includes(k))) return entry.answer
+You have deep knowledge of the following:
+
+INDIAN STOCKS (NSE): Loaded dynamically from stock_universe table.
+
+GLOBAL STOCKS (US): Loaded dynamically from stock_universe table.
+
+CRYPTO: BTC-USD, ETH-USD, BNB-USD, SOL-USD, XRP-USD, ADA-USD, DOGE-USD, DOT-USD, MATIC-USD, LTC-USD, TRX-USD, AVAX-USD, SHIB-USD, LINK-USD, ATOM-USD, XLM-USD, ETC-USD, ICP-USD, FIL-USD, APT-USD
+
+APP FEATURES:
+- Portfolio creation and management (add/remove stocks)
+- ML models: Linear Regression (next-day price prediction), Logistic Regression (UP/DOWN direction), ARIMA/LSTM time-series forecast (1d/7d), K-Means portfolio clustering (High/Medium/Low risk), Growth Analysis (3-month return, volatility, Sharpe Ratio), Portfolio Star Rating (1-5), Summary Report, Stock Recommendations
+- EDA tools: Gold/Silver correlation analysis, Nifty 50 clustering
+- Auth: JWT login, MPIN, Telegram OTP for password reset
+
+STRICT RULES:
+1. Only answer finance, stock market, investing, and app-related questions
+2. If asked anything unrelated (coding help, general knowledge, jokes etc.), politely decline and redirect to finance topics
+3. Always be concise — max 4-5 sentences unless a detailed comparison is requested
+4. For "best stock" or "buy recommendation" questions, give a balanced answer with 2-3 options across sectors and always add a risk disclaimer
+5. For app feature questions, explain the relevant ML model or feature clearly
+6. Use Indian Rupee (₹) for NSE/BSE stocks and USD ($) for US stocks
+7. Format responses cleanly — use bullet points for lists, bold for stock symbols, and keep it conversational
+8. Never make absolute buy/sell guarantees — always recommend consulting a SEBI registered financial advisor for actual investment decisions`
+
+function buildSystemPrompt(indianSymbols = [], globalSymbols = []) {
+  const indianLine = indianSymbols.length
+    ? `INDIAN STOCKS (NSE): ${indianSymbols.join(', ')}`
+    : 'INDIAN STOCKS (NSE): Loaded dynamically from stock_universe table.'
+  const globalLine = globalSymbols.length
+    ? `GLOBAL STOCKS (US): ${globalSymbols.join(', ')}`
+    : 'GLOBAL STOCKS (US): Loaded dynamically from stock_universe table.'
+  return BASE_SYSTEM_PROMPT
+    .replace('INDIAN STOCKS (NSE): Loaded dynamically from stock_universe table.', indianLine)
+    .replace('GLOBAL STOCKS (US): Loaded dynamically from stock_universe table.', globalLine)
+}
+
+// ── Simple markdown renderer ──────────────────────────────────────────────────
+function renderMarkdown(text) {
+  const lines = text.split('\n')
+  const elements = []
+  let key = 0
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (!line.trim()) { elements.push(<div key={key++} style={{ height: 6 }} />); continue }
+
+    // Bold entire line
+    if (line.startsWith('**') && line.endsWith('**') && line.length > 4) {
+      elements.push(<p key={key++} style={{ color: '#e2e8f0', fontWeight: 700, fontSize: 12, margin: '4px 0' }}>{line.slice(2, -2)}</p>)
+      continue
+    }
+    // Bullet
+    if (line.startsWith('- ') || line.startsWith('• ')) {
+      const content = line.slice(2)
+      elements.push(
+        <div key={key++} style={{ display: 'flex', gap: 6, fontSize: 12, color: '#cbd5e1', margin: '2px 0' }}>
+          <span style={{ color: '#38bdf8', flexShrink: 0 }}>·</span>
+          <span dangerouslySetInnerHTML={{ __html: content.replace(/\*\*(.*?)\*\*/g, '<strong style="color:#e2e8f0">$1</strong>') }} />
+        </div>
+      )
+      continue
+    }
+    // Regular line with inline bold
+    elements.push(
+      <p key={key++} style={{ fontSize: 12, color: '#cbd5e1', margin: '2px 0', lineHeight: 1.6 }}
+        dangerouslySetInnerHTML={{ __html: line.replace(/\*\*(.*?)\*\*/g, '<strong style="color:#e2e8f0">$1</strong>') }} />
+    )
   }
-  return `🤖 I can only answer questions about:\n\n${ALLOWED_TOPICS.map(t => `• **${t.charAt(0).toUpperCase() + t.slice(1)}**`).join('\n')}\n\n📬 For further help, reach out via Telegram.`
+  return elements
 }
 
 // ── Voice recognition ─────────────────────────────────────────────────────────
@@ -163,24 +199,122 @@ function useSpeechRecognition(onResult) {
   return { startListening, listening, supported }
 }
 
+// ── Typing indicator ──────────────────────────────────────────────────────────
+function TypingDots() {
+  return (
+    <div style={{ display: 'flex', gap: 4, alignItems: 'center', padding: '8px 12px', background: '#1E2530', border: '1px solid #1E2530', borderRadius: 12, borderBottomLeftRadius: 4, width: 'fit-content' }}>
+      {[0, 1, 2].map(i => (
+        <span key={i} style={{
+          width: 6, height: 6, borderRadius: '50%', background: '#38bdf8',
+          animation: `blink-dot 1.4s ease-in-out ${i * 0.2}s infinite`
+        }} />
+      ))}
+    </div>
+  )
+}
+
 // ── Chatbot Widget ─────────────────────────────────────────────────────────────
 function ChatbotWidget() {
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState([
-    { role: 'bot', text: '👋 Hi! I\'m your AI Stock Assistant.\n\nAsk me about:\n• Market Analysis\n• Price Predictions\n• Risk Levels\n• Stock Recommendations\n• Mutual Funds\n• Platform Overview' }
+    { role: 'bot', text: '👋 Hi! I\'m your AI Stock Assistant powered by Gemini.\n\nAsk me about:\n• Market Analysis & Stock Picks\n• ARIMA / RNN Price Forecasts\n• Portfolio Risk & Clustering\n• Mutual Funds & ETFs\n• App Features & How-To' }
   ])
   const [input, setInput] = useState('')
+  const [typing, setTyping] = useState(false)
+  const [systemPrompt, setSystemPrompt] = useState(BASE_SYSTEM_PROMPT)
+  // Gemini conversation history: [{role:'user',parts:[{text}]},{role:'model',parts:[{text}]}]
+  const [history, setHistory] = useState([])
   const bottomRef = useRef(null)
   const { startListening, listening, supported } = useSpeechRecognition(text => setInput(text))
 
   useEffect(() => {
     if (open) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, open])
+  }, [messages, open, typing])
 
-  function sendMessage(text) {
-    if (!text.trim()) return
-    setMessages(prev => [...prev, { role: 'user', text: text.trim() }, { role: 'bot', text: getBotReply(text.trim()) }])
+  useEffect(() => {
+    let mounted = true
+    async function loadUniversePrompt() {
+      try {
+        const [inRes, usRes] = await Promise.all([
+          fetchStockUniverse('IN'),
+          fetchStockUniverse('US'),
+        ])
+        if (!mounted) return
+        const inSymbols = inRes?.symbols || []
+        const usSymbols = usRes?.symbols || []
+        setSystemPrompt(buildSystemPrompt(inSymbols, usSymbols))
+      } catch {
+        if (!mounted) return
+        setSystemPrompt(BASE_SYSTEM_PROMPT)
+      }
+    }
+    loadUniversePrompt()
+    return () => { mounted = false }
+  }, [])
+
+  async function sendMessage(text) {
+    const trimmed = text.trim()
+    if (!trimmed || typing) return
     setInput('')
+
+    // Add user message to display
+    setMessages(prev => [...prev, { role: 'user', text: trimmed }])
+
+    // Build new history entry
+    const newUserTurn = { role: 'user', parts: [{ text: trimmed }] }
+    const updatedHistory = [...history, newUserTurn]
+
+    // Cap at last 10 exchanges (20 turns)
+    const cappedHistory = updatedHistory.slice(-20)
+
+    setTyping(true)
+
+    try {
+      const reply = await callGeminiProxy(cappedHistory, systemPrompt)
+      const newModelTurn = { role: 'model', parts: [{ text: reply }] }
+      setHistory([...cappedHistory, newModelTurn])
+      setMessages(prev => [...prev, { role: 'bot', text: reply }])
+    } catch (err) {
+      console.error('Chatbot error:', err)
+      const status = err?.response?.status
+      const detail = err?.response?.data?.detail || ''
+      const backendError = err?.response?.data?.error || ''
+      const retryAfter = err?.response?.data?.retry_after_seconds || ''
+      let msg
+      if (status === 429) {
+        const parsedRetry = parseInt(String(retryAfter), 10)
+        const waitHint = Number.isFinite(parsedRetry) && parsedRetry > 0
+          ? `Please wait ~${parsedRetry} seconds and try again.`
+          : 'Please wait 1-2 minutes and try again.'
+        const parsed429Msg = (() => {
+          try {
+            const parsed = JSON.parse(backendError)
+            return parsed?.error?.message || parsed?.message || ''
+          } catch (_) {
+            return ''
+          }
+        })()
+        msg = parsed429Msg
+          ? `Rate limit reached.\n${parsed429Msg}`
+          : `${detail || 'Rate limit reached.'} ${waitHint}`
+      } else if (detail) {
+        const rawLine = String(backendError).split('\n').map(s => s.trim()).find(Boolean) || ''
+        let hint = rawLine
+        try {
+          const parsed = JSON.parse(backendError)
+          const parsedMsg = parsed?.error?.message || parsed?.message || ''
+          if (parsedMsg) hint = parsedMsg
+        } catch (_) {
+          // Non-JSON backend error body; keep first-line fallback.
+        }
+        msg = hint ? `Error: ${detail}\n${hint}` : `Error: ${detail}`
+      } else {
+        msg = 'Unable to reach AI. Please try again.'
+      }
+      setMessages(prev => [...prev, { role: 'bot', text: msg, isError: true }])
+    } finally {
+      setTyping(false)
+    }
   }
 
   return (
@@ -197,7 +331,7 @@ function ChatbotWidget() {
               <div className="text-sm font-bold text-white">AI Stock Assistant</div>
               <div className="flex items-center gap-1.5 mt-0.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-green-400 dot-blink" />
-                <span className="text-xs" style={{ color: 'rgba(255,255,255,0.6)' }}>Rule-based · Finance topics only</span>
+                <span className="text-xs" style={{ color: 'rgba(255,255,255,0.6)' }}>Powered by Gemini · Finance topics only</span>
               </div>
             </div>
             <button onClick={() => setOpen(false)} className="ml-auto text-white/50 hover:text-white transition-colors text-xl leading-none">✕</button>
@@ -207,18 +341,22 @@ function ChatbotWidget() {
           <div className="flex-1 overflow-y-auto p-3 space-y-3" style={{ background: '#080C12' }}>
             {messages.map((m, i) => (
               <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[85%] rounded-xl px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap ${
-                  m.role === 'user'
-                    ? 'text-white rounded-br-none'
-                    : 'rounded-bl-none'
-                }`}
-                style={m.role === 'user'
-                  ? { background: 'linear-gradient(135deg,#0369a1,#0EA5E9)' }
-                  : { background: '#1E2530', color: '#cbd5e1', border: '1px solid #1E2530' }}>
-                  {m.text}
+                <div className={`max-w-[88%] rounded-xl px-3 py-2 ${m.role === 'user' ? 'rounded-br-none' : 'rounded-bl-none'}`}
+                  style={m.role === 'user'
+                    ? { background: 'linear-gradient(135deg,#0369a1,#0EA5E9)', color: '#fff' }
+                    : { background: m.isError ? 'rgba(239,68,68,0.08)' : '#1E2530', border: m.isError ? '1px solid rgba(239,68,68,0.3)' : '1px solid #1E2530' }}>
+                  {m.role === 'user'
+                    ? <span style={{ fontSize: 12, lineHeight: 1.6 }}>{m.text}</span>
+                    : <div>{renderMarkdown(m.text)}</div>
+                  }
                 </div>
               </div>
             ))}
+            {typing && (
+              <div className="flex justify-start">
+                <TypingDots />
+              </div>
+            )}
             <div ref={bottomRef} />
           </div>
 
@@ -230,6 +368,7 @@ function ChatbotWidget() {
               style={{ background: '#151C26', border: '1px solid #1E2530', color: '#e2e8f0' }}
               placeholder="Ask about stocks, risk, funds..."
               value={input}
+              disabled={typing}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input) } }}
             />
@@ -242,9 +381,9 @@ function ChatbotWidget() {
                 🎤
               </button>
             )}
-            <button onClick={() => sendMessage(input)}
+            <button onClick={() => sendMessage(input)} disabled={typing}
               className="w-8 h-8 rounded-xl flex items-center justify-center text-white transition-colors text-sm"
-              style={{ background: 'linear-gradient(135deg,#0369a1,#0EA5E9)' }}>
+              style={{ background: typing ? '#1E2530' : 'linear-gradient(135deg,#0369a1,#0EA5E9)', opacity: typing ? 0.5 : 1 }}>
               ➤
             </button>
           </div>
@@ -265,7 +404,6 @@ function ChatbotWidget() {
             <path d="M8 11h.01M12 11h.01M16 11h.01" strokeLinecap="round"/>
           </svg>
         )}
-        {/* Notification dot */}
         {!open && (
           <span className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-green-400 border-2 dot-blink"
                 style={{ borderColor: '#070B14' }} />

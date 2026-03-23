@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Stock, StockPrice
+from .models import Stock, StockPrice, StockUniverse
 
 class StockSerializer(serializers.ModelSerializer):
     price = serializers.SerializerMethodField()
@@ -25,3 +25,9 @@ class StockPriceSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockPrice
         fields = ['id', 'date', 'open_price', 'close_price', 'high_price', 'low_price', 'volume']
+
+
+class StockUniverseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StockUniverse
+        fields = ['id', 'symbol', 'market', 'display_order', 'is_active']

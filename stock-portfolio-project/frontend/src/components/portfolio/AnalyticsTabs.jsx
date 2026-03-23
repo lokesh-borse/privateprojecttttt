@@ -4,12 +4,13 @@
  * Each tab is lazy-loaded on first open.
  * Dark terminal theme — all charts use surface-900 background.
  */
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import {
   Chart as ChartJS, CategoryScale, LinearScale, PointElement,
   LineElement, Title, Tooltip, Legend, Filler,
 } from 'chart.js'
 import { Line, Scatter } from 'react-chartjs-2'
+import api from '../../api/axios.js'
 
 ChartJS.register(
   CategoryScale, LinearScale, PointElement, LineElement,
@@ -417,8 +418,76 @@ export function GrowthTab({ growthData, loading }) {
   )
 }
 
-// ─── TAB 4 : AI Summary Report ───────────────────────────────────────────────
+// ─── TAB 4 : AI Summary Report (Gemini Enhanced) ──────────────────────────────────
+// Gemini calls go through the Django backend proxy (/api/stocks/gemini/)
+
+function renderSummaryMarkdown(text, baseColor = '#94a3b8') {
+  return (text || '').split('\n').map((line, i) => {
+    if (!line.trim()) return <div key={i} style={{ height: 6 }} />
+    if (line.startsWith('## '))
+      return <h3 key={i} style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', margin: '12px 0 4px' }}>{line.slice(3)}</h3>
+    if (line.startsWith('# '))
+      return <h2 key={i} style={{ fontSize: 15, fontWeight: 800, color: '#38bdf8', margin: '14px 0 6px' }}>{line.slice(2)}</h2>
+    if (line.startsWith('- ') || line.startsWith('• '))
+      return (
+        <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12, color: baseColor, margin: '3px 0', lineHeight: 1.6 }}>
+          <span style={{ color: '#38bdf8', flexShrink: 0 }}>·</span>
+          <span dangerouslySetInnerHTML={{ __html: line.slice(2).replace(/\*\*(.*?)\*\*/g, '<strong style="color:#e2e8f0">$1</strong>') }} />
+        </div>
+      )
+    if (line.startsWith('⚠️') || line.startsWith('✅'))
+      return <p key={i} style={{ fontSize: 12, color: line.startsWith('⚠️') ? '#f59e0b' : '#22c55e', margin: '4px 0', lineHeight: 1.6 }}>{line}</p>
+    return (
+      <p key={i} style={{ fontSize: 12, color: baseColor, margin: '2px 0', lineHeight: 1.6 }}
+        dangerouslySetInnerHTML={{ __html: line.replace(/\*\*(.*?)\*\*/g, '<strong style="color:#e2e8f0">$1</strong>') }} />
+    )
+  })
+}
+
 export function SummaryTab({ summaryData, loading }) {
+  const [geminiReport, setGeminiReport] = useState(null)
+  const [geminiLoading, setGeminiLoading] = useState(false)
+  const [geminiError, setGeminiError] = useState('')
+
+  // Fetch Gemini insights once backend data is ready
+  useEffect(() => {
+    if (!summaryData?.report || geminiReport || geminiLoading) return
+
+    const prompt = `You are an expert financial analyst AI. A user's stock portfolio has been analysed using K-Means clustering. Here is the cluster summary report:
+
+---
+${summaryData.report}
+---
+
+Portfolio name: ${summaryData.portfolio_name || 'My Portfolio'}
+
+Based on this data, generate a rich, actionable AI insights report with the following sections:
+1. **Overall Portfolio Health** — 2-3 sentences on the overall risk/return balance
+2. **Key Risks to Watch** — bullet points for 2-3 specific risks based on the cluster data
+3. **Opportunities** — 2-3 actionable suggestions using the existing holdings
+4. **Diversification Score** — rate from 1-10 and explain briefly
+5. **Suggested Next Steps** — 2-3 concrete steps the investor can take
+
+Keep the response concise (max 200 words), practical, and avoid repeating what's already in the report. End with a one-line SEBI disclaimer.`
+
+    setGeminiLoading(true)
+    api.post('stocks/gemini/', {
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      system_prompt: 'You are a concise, expert financial portfolio analyst focused on Indian equity markets. Format output with markdown headers and bullet points.',
+    })
+      .then(res => {
+        const text = res.data?.reply
+        if (text) setGeminiReport(text)
+        else setGeminiError('⚠️ Gemini returned an empty response.')
+      })
+      .catch(err => {
+        console.error('Gemini SummaryTab error:', err)
+        const detail = err?.response?.data?.detail || ''
+        setGeminiError(detail ? `⚠️ ${detail}` : '⚠️ Unable to fetch AI insights.')
+      })
+      .finally(() => setGeminiLoading(false))
+  }, [summaryData])
+
   if (loading) {
     return (
       <div className="p-4 space-y-3">
@@ -429,29 +498,59 @@ export function SummaryTab({ summaryData, loading }) {
   if (!summaryData) return <div className="p-8 text-center text-neutral-500 text-sm">Summary not loaded.</div>
   if (summaryData.error) return <div className="p-4 text-xs text-loss-400">{summaryData.error}</div>
 
-  // Parse simple headings: lines starting with # become styled headers
-  const lines = (summaryData.report || '').split('\n')
   return (
-    <div className="p-5 space-y-1.5 max-h-[480px] overflow-y-auto">
-      <div className="flex items-center gap-2 mb-4 pb-3 border-b border-surface-700">
-        <div className="w-6 h-6 rounded bg-ai-500/20 border border-ai-500/30 flex items-center justify-center text-ai-400 text-xs">✦</div>
-        <span className="text-xs font-medium text-ai-400 uppercase tracking-wider">Gemini AI Report</span>
+    <div className="p-5 space-y-5 max-h-[580px] overflow-y-auto">
+
+      {/* ── Section A: Cluster Analysis ── */}
+      <div style={{ background: '#0D1117', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 12, padding: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, paddingBottom: 10, borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          <div style={{ width: 24, height: 24, borderRadius: 6, background: 'rgba(14,165,233,0.1)', border: '1px solid rgba(14,165,233,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12 }}>📊</div>
+          <span style={{ fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Cluster Analysis</span>
+        </div>
+        <div>{renderSummaryMarkdown(summaryData.report)}</div>
       </div>
-      {lines.map((line, i) => {
-        if (!line.trim()) return <div key={i} className="h-2" />
-        if (line.startsWith('## '))
-          return <h3 key={i} className="text-sm font-semibold text-neutral-200 mt-3 mb-1">{line.slice(3)}</h3>
-        if (line.startsWith('# '))
-          return <h2 key={i} className="text-base font-bold text-brand-400 mt-4 mb-2">{line.slice(2)}</h2>
-        if (line.startsWith('- ') || line.startsWith('• '))
-          return <p key={i} className="text-xs text-neutral-400 pl-3 leading-relaxed">· {line.slice(2)}</p>
-        if (line.startsWith('**') && line.endsWith('**'))
-          return <p key={i} className="text-xs font-semibold text-neutral-300 leading-relaxed">{line.slice(2,-2)}</p>
-        return <p key={i} className="text-xs text-neutral-400 leading-relaxed">{line}</p>
-      })}
+
+      {/* ── Section B: Gemini AI Insights ── */}
+      <div style={{ borderLeft: '3px solid #38bdf8', paddingLeft: 0, borderRadius: 12, overflow: 'hidden', border: '1px solid rgba(56,189,248,0.15)' }}>
+        {/* Card header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'rgba(56,189,248,0.04)', borderBottom: '1px solid rgba(56,189,248,0.1)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 22, height: 22, borderRadius: 6, background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11 }}>🤖</div>
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Gemini AI Insights</span>
+          </div>
+          <span style={{ fontSize: 10, color: '#38bdf8', background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.2)', padding: '2px 8px', borderRadius: 100 }}>
+            Powered by Gemini ✨
+          </span>
+        </div>
+
+        {/* Content */}
+        <div style={{ padding: 14, background: '#0a0e1a' }}>
+          {geminiLoading && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {[100, 85, 92, 70, 88].map((w, i) => (
+                <SkeletonBlock key={i} h="12px" w={`${w}%`} />
+              ))}
+              <div style={{ height: 8 }} />
+              {[78, 95, 60].map((w, i) => (
+                <SkeletonBlock key={`b${i}`} h="12px" w={`${w}%`} />
+              ))}
+            </div>
+          )}
+          {geminiError && !geminiLoading && (
+            <p style={{ fontSize: 12, color: '#ef4444' }}>{geminiError}</p>
+          )}
+          {geminiReport && !geminiLoading && (
+            <div>{renderSummaryMarkdown(geminiReport, '#94a3b8')}</div>
+          )}
+          {!geminiLoading && !geminiReport && !geminiError && (
+            <p style={{ fontSize: 12, color: '#475569', fontStyle: 'italic' }}>Generating AI insights...</p>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
+
 
 // ─── TAB 5 : Recommendations ─────────────────────────────────────────────────
 export function RecommendTab({ recommendData, loading, onAdd }) {

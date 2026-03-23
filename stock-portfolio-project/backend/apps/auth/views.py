@@ -12,6 +12,14 @@ from .telegram_service import send_otp_via_telegram, generate_otp
 from apps.portfolio.models import Portfolio
 from apps.portfolio.serializers import PortfolioSerializer
 
+COMMON_EMAIL_DOMAIN_FIXES = {
+    'gmai.com': 'gmail.com',
+    'gmial.com': 'gmail.com',
+    'gnail.com': 'gmail.com',
+    'hotnail.com': 'hotmail.com',
+    'outllok.com': 'outlook.com',
+}
+
 
 def _get_tokens_for_user(user):
     """Generate JWT access + refresh tokens for the given user."""
@@ -22,6 +30,41 @@ def _get_tokens_for_user(user):
     }
 
 
+def _normalize_email(raw_email):
+    """Normalize email by trimming, lowercasing, and fixing common domain typos."""
+    email = (raw_email or '').strip().lower()
+    if '@' not in email:
+        return email
+    local_part, domain = email.rsplit('@', 1)
+    fixed_domain = COMMON_EMAIL_DOMAIN_FIXES.get(domain, domain)
+    return f'{local_part}@{fixed_domain}'
+
+
+def _email_candidates(raw_identifier):
+    """
+    Build likely email variants for tolerant login.
+    Includes normalized value and known typo-domain alternatives.
+    """
+    email = _normalize_email(raw_identifier)
+    if '@' not in email:
+        return [email]
+
+    local_part, domain = email.rsplit('@', 1)
+    candidates = [email]
+
+    for typo_domain, canonical_domain in COMMON_EMAIL_DOMAIN_FIXES.items():
+        if canonical_domain == domain:
+            candidates.append(f'{local_part}@{typo_domain}')
+
+    seen = set()
+    deduped = []
+    for candidate in candidates:
+        if candidate not in seen:
+            seen.add(candidate)
+            deduped.append(candidate)
+    return deduped
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register(request):
@@ -29,9 +72,11 @@ def register(request):
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     data = serializer.validated_data
+    email = _normalize_email(data.get('email'))
+    username = (data['username'] or '').strip()
     user = User.objects.create_user(
-        username=data['username'],
-        email=data['email'],
+        username=username,
+        email=email,
         password=data['password']
     )
     UserProfile.objects.create(
@@ -46,14 +91,24 @@ def register(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def login(request):
-    email = request.data.get('email')
+    email = (request.data.get('email') or '').strip()
+    username = (request.data.get('username') or '').strip()
+    identifier = email or username
     password = request.data.get('password')
-    if not email or not password:
-        return Response({'detail': 'Email and password are required'}, status=status.HTTP_400_BAD_REQUEST)
-    try:
-        user_obj = User.objects.get(email=email)
-    except User.DoesNotExist:
+    if not identifier or not password:
+        return Response({'detail': 'Email/username and password are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user_obj = None
+    if '@' in identifier:
+        for candidate in _email_candidates(identifier):
+            user_obj = User.objects.filter(email__iexact=candidate).order_by('id').first()
+            if user_obj:
+                break
+    if not user_obj:
+        user_obj = User.objects.filter(username__iexact=identifier).order_by('id').first()
+    if not user_obj:
         return Response({'detail': 'Invalid credentials'}, status=status.HTTP_400_BAD_REQUEST)
+
     user = authenticate(username=user_obj.username, password=password)
     if not user:
         return Response({'detail': 'Invalid credentials'}, status=status.HTTP_400_BAD_REQUEST)
@@ -171,7 +226,7 @@ def forgot_password(request):
     - Backend finds the account, generates a 6-digit OTP, and sends it to
       the user's Telegram Chat ID stored in their profile
     """
-    email = (request.data.get('email') or '').strip().lower()
+    email = _normalize_email(request.data.get('email'))
     if not email:
         return Response({'detail': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -210,7 +265,7 @@ def reset_password(request):
     - User provides email, the OTP they received, and their new password
     - Backend verifies the OTP and updates the password
     """
-    email = (request.data.get('email') or '').strip().lower()
+    email = _normalize_email(request.data.get('email'))
     otp_code = (request.data.get('otp') or '').strip()
     new_password = request.data.get('new_password') or ''
 

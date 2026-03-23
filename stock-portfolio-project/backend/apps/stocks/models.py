@@ -27,3 +27,29 @@ class StockPrice(models.Model):
 
     class Meta:
         unique_together = ('stock', 'date')
+
+
+class StockUniverse(models.Model):
+    MARKET_IN = 'IN'
+    MARKET_US = 'US'
+    MARKET_CHOICES = (
+        (MARKET_IN, 'Indian'),
+        (MARKET_US, 'US'),
+    )
+
+    symbol = models.CharField(max_length=32)
+    market = models.CharField(max_length=2, choices=MARKET_CHOICES)
+    display_order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('symbol', 'market')
+        indexes = [
+            models.Index(fields=['market', 'is_active', 'display_order']),
+        ]
+        ordering = ['market', 'display_order', 'symbol']
+
+    def __str__(self):
+        return f"{self.symbol} ({self.market})"
