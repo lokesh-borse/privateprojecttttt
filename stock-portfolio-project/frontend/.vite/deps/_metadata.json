@@ -1,0 +1,43 @@
+{
+  "hash": "fdf3937e",
+  "configHash": "621d64b5",
+  "lockfileHash": "e3b0c442",
+  "browserHash": "6feb88ca",
+  "optimized": {
+    "react": {
+      "src": "../../node_modules/react/index.js",
+      "file": "react.js",
+      "fileHash": "bcc4135b",
+      "needsInterop": true
+    },
+    "chart.js": {
+      "src": "../../node_modules/chart.js/dist/chart.js",
+      "file": "chart__js.js",
+      "fileHash": "307993f5",
+      "needsInterop": false
+    },
+    "react-chartjs-2": {
+      "src": "../../node_modules/react-chartjs-2/dist/index.js",
+      "file": "react-chartjs-2.js",
+      "fileHash": "8bee3059",
+      "needsInterop": false
+    },
+    "react-router-dom": {
+      "src": "../../node_modules/react-router-dom/dist/index.js",
+      "file": "react-router-dom.js",
+      "fileHash": "961dac47",
+      "needsInterop": false
+    }
+  },
+  "chunks": {
+    "chunk-LVO5EB2C": {
+      "file": "chunk-LVO5EB2C.js"
+    },
+    "chunk-4SFRHSJ3": {
+      "file": "chunk-4SFRHSJ3.js"
+    },
+    "chunk-EQCVQC35": {
+      "file": "chunk-EQCVQC35.js"
+    }
+  }
+}
