@@ -104,6 +104,13 @@ export async function fetchStockUniverse(market, includeInactive = false) {
   return res.data
 }
 
+export async function fetchRecommendedPortfolios(market) {
+  const params = {}
+  if (market) params.market = market
+  const res = await api.get('stocks/recommended-portfolios/', { params })
+  return res.data
+}
+
 export async function searchLiveStocks(query, limit = 10) {
   const res = await api.get('stocks/live-search/', { params: { q: query, limit } })
   return res.data

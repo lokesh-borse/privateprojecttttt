@@ -36,6 +36,7 @@ export default function App() {
 
         {/* Authenticated routes */}
         <Route path="/portfolio" element={<ProtectedRoute><Portfolio /></ProtectedRoute>} />
+        <Route path="/portfolio/recommended/:market/:sector" element={<ProtectedRoute><PortfolioDetail /></ProtectedRoute>} />
         <Route path="/portfolio/:id" element={<ProtectedRoute><PortfolioDetail /></ProtectedRoute>} />
         <Route path="/stocks" element={<ProtectedRoute><Stocks /></ProtectedRoute>} />
         <Route path="/stocks/:id" element={<ProtectedRoute><StockDetail /></ProtectedRoute>} />

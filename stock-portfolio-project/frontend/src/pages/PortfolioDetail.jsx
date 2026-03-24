@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState, useRef, lazy, Suspense } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { LinearScale, PointElement, Tooltip, Legend, Chart as ChartJS } from 'chart.js'
 import {
-  addStockToPortfolio, fetchHistoricalBySymbol, fetchLiveStockBySymbol,
+  addStockToPortfolio, createPortfolio, fetchHistoricalBySymbol, fetchLiveStockBySymbol,
   fetchPortfolioById, fetchPortfolioLinearRegression, fetchPortfolioLogisticRegression,
   fetchPortfolioClusters, fetchGrowthAnalysis, fetchPortfolioRating,
-  fetchSummaryReport, fetchRecommendStocks, removeStockFromPortfolio, searchLiveStocks,
+  fetchSummaryReport, fetchRecommendStocks, fetchRecommendedPortfolios,
+  removeStockFromPortfolio, searchLiveStocks,
 } from '../api/stocks.js'
 import MpinModal from '../components/MpinModal.jsx'
 import {
@@ -246,7 +247,12 @@ const TABS = [
 ]
 
 export default function PortfolioDetail() {
-  const { id } = useParams()
+  const { id, market, sector } = useParams()
+  const isRecommendedView = Boolean(market && sector)
+  const decodedMarket = decodeURIComponent(market || '')
+  const decodedSector = decodeURIComponent(sector || '')
+  const recommendedStorageKey = 'recommended_portfolio_id_map_v1'
+  const recommendedMapKey = `${decodedMarket.toLowerCase()}::${decodedSector.toLowerCase()}`
 
   // ── Core state (unchanged from original) ─────────────────────────────────
   const [portfolio,       setPortfolio]       = useState(null)
@@ -268,6 +274,7 @@ export default function PortfolioDetail() {
   const [recommendLoading,setRecommendLoading]= useState(false)
   const [mpinOpen,        setMpinOpen]        = useState(false)
   const [pendingRemove,   setPendingRemove]   = useState(null)
+  const [activePortfolioId, setActivePortfolioId] = useState(isRecommendedView ? null : id)
 
   // ── UI-only state ─────────────────────────────────────────────────────────
   const [drawerOpen,  setDrawerOpen]  = useState(false)
@@ -278,48 +285,115 @@ export default function PortfolioDetail() {
   const [lastRefresh, setLastRefresh] = useState(new Date())
 
   // ── API calls (all unchanged logic from original) ─────────────────────────
-  async function loadPortfolio() {
-    try { const d = await fetchPortfolioById(id); setPortfolio(d) }
-    catch { setMessage('Failed to load portfolio') }
+  function getRecommendedIdMap() {
+    try {
+      const raw = localStorage.getItem(recommendedStorageKey)
+      const parsed = raw ? JSON.parse(raw) : {}
+      return parsed && typeof parsed === 'object' ? parsed : {}
+    } catch {
+      return {}
+    }
   }
-  async function loadLinearRegression() {
+
+  function saveRecommendedIdMap(map) {
+    localStorage.setItem(recommendedStorageKey, JSON.stringify(map))
+  }
+
+  async function ensureRecommendedPortfolioId() {
+    const idMap = getRecommendedIdMap()
+    const cachedId = idMap[recommendedMapKey]
+    if (cachedId) {
+      try {
+        await fetchPortfolioById(cachedId)
+        return cachedId
+      } catch {}
+    }
+
+    const data = await fetchRecommendedPortfolios(decodedMarket)
+    const markets = Array.isArray(data?.markets) ? data.markets : []
+    const marketItem = markets.find(
+      (m) => String(m?.market || '').toLowerCase() === decodedMarket.toLowerCase()
+    ) || markets[0]
+    const sectorItem = (marketItem?.sectors || []).find(
+      (s) => String(s?.sector || '').toLowerCase() === decodedSector.toLowerCase()
+    )
+    if (!marketItem || !sectorItem) throw new Error('Recommended portfolio not found')
+
+    const created = await createPortfolio({
+      name: `${sectorItem.sector} (${marketItem.market})`,
+      description: `auto-generated from stock_universe symbols in sector: ${sectorItem.sector} (${marketItem.market})`,
+    })
+
+    const today = new Date().toISOString().slice(0, 10)
+    await Promise.all(
+      (sectorItem.stocks || []).map((stock) =>
+        addStockToPortfolio(created.id, stock.symbol, 1, 0, today).catch(() => null)
+      )
+    )
+
+    const nextMap = { ...idMap, [recommendedMapKey]: created.id }
+    saveRecommendedIdMap(nextMap)
+    return created.id
+  }
+
+  async function loadPortfolio() {
+    try {
+      const portfolioId = isRecommendedView ? await ensureRecommendedPortfolioId() : id
+      setActivePortfolioId(portfolioId)
+      const d = await fetchPortfolioById(portfolioId)
+      setPortfolio(d)
+    } catch {
+      setMessage('Failed to load portfolio')
+    }
+  }
+
+  async function loadLinearRegression(portfolioId) {
+    if (!portfolioId) return
     setLrLoading(true)
-    try { setLrData(await fetchPortfolioLinearRegression(id)) }
+    try { setLrData(await fetchPortfolioLinearRegression(portfolioId)) }
     catch { setLrData({ predictions: [], skipped: [] }) }
     finally { setLrLoading(false) }
   }
-  async function loadLogisticRegression() {
+  async function loadLogisticRegression(portfolioId) {
+    if (!portfolioId) return
     setLogLoading(true)
-    try { setLogData(await fetchPortfolioLogisticRegression(id)) }
+    try { setLogData(await fetchPortfolioLogisticRegression(portfolioId)) }
     catch { setLogData({ predictions: [], skipped: [] }) }
     finally { setLogLoading(false) }
   }
-  async function loadGrowthAnalysis() {
+  async function loadGrowthAnalysis(portfolioId) {
+    if (!portfolioId) return
     setGrowthLoading(true)
-    try { setGrowthData(await fetchGrowthAnalysis(id)) }
+    try { setGrowthData(await fetchGrowthAnalysis(portfolioId)) }
     catch (e) { setGrowthData({ error: e?.response?.data?.detail || 'Failed' }) }
     finally { setGrowthLoading(false) }
   }
-  async function loadSummary() {
+  async function loadSummary(portfolioId) {
+    if (!portfolioId) return
     setSummaryLoading(true)
-    try { setSummaryData(await fetchSummaryReport(id)) }
+    try { setSummaryData(await fetchSummaryReport(portfolioId)) }
     catch (e) { setSummaryData({ error: e?.response?.data?.detail || 'Failed' }) }
     finally { setSummaryLoading(false) }
   }
-  async function loadRecommend() {
+  async function loadRecommend(portfolioId) {
+    if (!portfolioId) return
     setRecommendLoading(true)
-    try { setRecommendData(await fetchRecommendStocks(id)) }
+    try { setRecommendData(await fetchRecommendStocks(portfolioId)) }
     catch (e) { setRecommendData({ error: e?.response?.data?.detail || 'Failed' }) }
     finally { setRecommendLoading(false) }
   }
-  async function loadRating() {
-    try { setRatingData(await fetchPortfolioRating(id)) } catch {}
+  async function loadRating(portfolioId) {
+    if (!portfolioId) return
+    try { setRatingData(await fetchPortfolioRating(portfolioId)) } catch {}
   }
 
-  useEffect(() => { loadPortfolio() }, [id])
-  useEffect(() => { loadLinearRegression() }, [id])
-  useEffect(() => { loadLogisticRegression() }, [id])
-  useEffect(() => { loadRating() }, [id])
+  useEffect(() => { loadPortfolio() }, [id, isRecommendedView, decodedMarket, decodedSector])
+  useEffect(() => {
+    if (!activePortfolioId) return
+    loadLinearRegression(activePortfolioId)
+    loadLogisticRegression(activePortfolioId)
+    loadRating(activePortfolioId)
+  }, [activePortfolioId])
 
   // ── Debounced stock search ─────────────────────────────────────────────────
   useEffect(() => {
@@ -422,21 +496,23 @@ export default function PortfolioDetail() {
 
   // ── Add / Remove ──────────────────────────────────────────────────────────
   async function onAdd(symbol) {
+    if (!activePortfolioId) return
     try {
-      await addStockToPortfolio(id, symbol, 1, 0, new Date().toISOString().slice(0, 10))
+      await addStockToPortfolio(activePortfolioId, symbol, 1, 0, new Date().toISOString().slice(0, 10))
       setMessage(`${symbol} added to portfolio`)
       setQuery(''); setSuggestions([])
       setDrawerOpen(false)
-      await loadPortfolio(); await loadLinearRegression(); await loadLogisticRegression()
+      await loadPortfolio(); await loadLinearRegression(activePortfolioId); await loadLogisticRegression(activePortfolioId)
     } catch { setMessage('Failed to add stock') }
   }
   function requestRemove(symbol) { setPendingRemove(symbol); setMpinOpen(true) }
   async function onRemove() {
+    if (!activePortfolioId) return
     const sym = pendingRemove; setMpinOpen(false); setPendingRemove(null)
     try {
-      await removeStockFromPortfolio(id, sym)
+      await removeStockFromPortfolio(activePortfolioId, sym)
       setMessage(`${sym} removed`)
-      await loadPortfolio(); await loadLinearRegression(); await loadLogisticRegression()
+      await loadPortfolio(); await loadLinearRegression(activePortfolioId); await loadLogisticRegression(activePortfolioId)
     } catch { setMessage('Remove failed') }
   }
 
@@ -444,14 +520,15 @@ export default function PortfolioDetail() {
   function toggleTab(tab) {
     if (activeTab === tab) { setActiveTab(null); return }
     setActiveTab(tab)
-    if (tab === 'growth'  && !growthData)   loadGrowthAnalysis()
-    if (tab === 'summary' && !summaryData)  loadSummary()
-    if (tab === 'reco'    && !recommendData) loadRecommend()
+    if (tab === 'growth'  && !growthData)   loadGrowthAnalysis(activePortfolioId)
+    if (tab === 'summary' && !summaryData)  loadSummary(activePortfolioId)
+    if (tab === 'reco'    && !recommendData) loadRecommend(activePortfolioId)
   }
 
   async function onRefreshAll() {
+    if (!activePortfolioId) return
     setRefreshingAll(true)
-    await Promise.all([loadPortfolio(), loadLinearRegression(), loadLogisticRegression()])
+    await Promise.all([loadPortfolio(), loadLinearRegression(activePortfolioId), loadLogisticRegression(activePortfolioId)])
     setLastRefresh(new Date()); setRefreshingAll(false)
   }
 
@@ -492,7 +569,7 @@ export default function PortfolioDetail() {
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-2xs uppercase tracking-widest text-brand-500 font-medium">Portfolio</span>
                   <span className="text-neutral-700">·</span>
-                  <span className="text-2xs text-neutral-600 font-mono">#{id}</span>
+                  <span className="text-2xs text-neutral-600 font-mono">#{activePortfolioId ?? id}</span>
                 </div>
                 <h1 className="text-2xl font-bold text-neutral-100 truncate">{portfolio.name}</h1>
                 {portfolio.description && (
@@ -538,9 +615,8 @@ export default function PortfolioDetail() {
           {/* ═══════════════════════════════════════════════════════════════
               QUICK STATS ROW
           ═══════════════════════════════════════════════════════════════ */}
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             {[
-              { label: 'Total Invested', value: `₹${fmtINR(totals.invested)}`, color: 'brand' },
               { label: 'Current Value',  value: `₹${fmtINR(totals.current)}`,  color: 'brand' },
               {
                 label: 'Best Performer',
@@ -605,11 +681,9 @@ export default function PortfolioDetail() {
                       { key: 'symbol',          label: 'Symbol',        align: 'left'  },
                       { key: 'name',            label: 'Company',       align: 'left'  },
                       { key: 'qty',             label: 'Qty',           align: 'right' },
-                      { key: 'avg',             label: 'Avg Buy',       align: 'right' },
                       { key: 'last',            label: 'LTP',           align: 'right' },
                       { key: null,              label: 'Cur. Value',    align: 'right' },
                       { key: 'pnl',             label: 'P&L (₹)',       align: 'right' },
-                      { key: 'pnlPct',          label: 'P&L %',         align: 'right' },
                       { key: 'predictedNextClose', label: 'LR Pred.',   align: 'right' },
                       { key: 'signal',          label: 'Signal',        align: 'center'},
                       { key: null,              label: 'Actions',       align: 'center'},
@@ -628,7 +702,7 @@ export default function PortfolioDetail() {
                 <tbody>
                 {sortedRows.length === 0 ? (
                     <tr>
-                      <td colSpan={11} className="px-6 py-16 text-center">
+                      <td colSpan={9} className="px-6 py-16 text-center">
                         <div className="flex flex-col items-center gap-3">
                           <svg viewBox="0 0 120 90" className="w-28 h-20 opacity-60">
                             <rect width="120" height="90" fill="#080C12" rx="8"/>
@@ -657,6 +731,7 @@ export default function PortfolioDetail() {
                     const rowBg  = isGain ? 'rgba(34,197,94,0.03)' : 'rgba(239,68,68,0.03)'
                     const ltpColor = isGain ? '#22C55E' : '#EF4444'
                     const curVal = ((s.last ?? s.current_price ?? 0) * s.qty)
+                    const stockLink = s.stock_id ? `/stocks/${s.stock_id}` : `/stocks/live/${encodeURIComponent(s.symbol)}`
                     const signalCfg = {
                       BUY:  { bg: 'rgba(34,197,94,0.12)',  border: 'rgba(34,197,94,0.3)',  color: '#22C55E' },
                       HOLD: { bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.3)', color: '#F59E0B' },
@@ -674,7 +749,8 @@ export default function PortfolioDetail() {
                         >
                           {/* Symbol — sticky */}
                           <td className="px-3 py-2.5 font-semibold text-left sticky left-0 bg-surface-900 z-[5]">
-                            <Link to={`/stocks/${s.stock_id}`}
+                            <Link to={stockLink}
+                              state={{ portfolioId: activePortfolioId }}
                               onClick={e => e.stopPropagation()}
                               className="text-brand-400 hover:text-brand-300 transition-colors font-mono">
                               {s.symbol}
@@ -682,9 +758,6 @@ export default function PortfolioDetail() {
                           </td>
                           <td className="px-3 py-2.5 text-neutral-400 truncate max-w-[140px]">{s.name}</td>
                           <td className="px-3 py-2.5 text-right font-mono text-neutral-300">{s.qty}</td>
-                          <td className="px-3 py-2.5 text-right font-mono text-neutral-400">
-                            {s.avg !== null ? `₹${fmtINR(s.avg)}` : '—'}
-                          </td>
                           {/* LTP with live dot */}
                           <td className="px-3 py-2.5 text-right font-mono font-medium" style={{ color: ltpColor }}>
                             <span className="inline-flex items-center justify-end gap-1">
@@ -699,15 +772,6 @@ export default function PortfolioDetail() {
                           <td className="px-3 py-2.5 text-right font-mono font-medium"
                             style={{ color: (s.pnl ?? 0) >= 0 ? '#22C55E' : '#EF4444' }}>
                             {s.pnl !== null ? `₹${fmtINR(Math.abs(s.pnl))}` : '—'}
-                          </td>
-                          {/* P&L % */}
-                          <td className="px-3 py-2.5 text-right">
-                            {s.pnlPct !== null ? (
-                              <span className={`text-2xs font-mono font-medium px-1.5 py-0.5 rounded border
-                                ${isGain ? 'text-gain-400 bg-gain-500/10 border-gain-500/25' : 'text-loss-400 bg-loss-500/10 border-loss-500/25'}`}>
-                                {isGain ? '▲' : '▼'} {Math.abs(s.pnlPct).toFixed(2)}%
-                              </span>
-                            ) : '—'}
                           </td>
                           {/* LR Prediction */}
                           <td className="px-3 py-2.5 text-right font-mono">
@@ -734,7 +798,8 @@ export default function PortfolioDetail() {
                           {/* Actions */}
                           <td className="px-3 py-2.5 text-center">
                             <div className="flex items-center justify-center gap-1.5" onClick={e => e.stopPropagation()}>
-                              <Link to={`/stocks/${s.stock_id}`}
+                              <Link to={stockLink}
+                                state={{ portfolioId: activePortfolioId }}
                                 className="px-2 py-1 rounded text-2xs font-medium text-brand-400 border border-brand-500/20 bg-brand-500/5 hover:bg-brand-500/15 transition-colors">
                                 View
                               </Link>
@@ -749,7 +814,7 @@ export default function PortfolioDetail() {
                         {/* Expanded mini-detail row */}
                         {expandedRow === s.symbol && (
                           <tr key={`${s.symbol}-expand`} className="border-b border-surface-700/50">
-                            <td colSpan={11} className="px-4 py-3 bg-surface-800/50">
+                            <td colSpan={9} className="px-4 py-3 bg-surface-800/50">
                               <div className="flex flex-wrap gap-4 text-xs">
                                 <div>
                                   <span className="text-neutral-500">52W Low: </span>
@@ -801,6 +866,7 @@ export default function PortfolioDetail() {
             <div className="md:hidden divide-y divide-surface-700">
               {sortedRows.map(s => {
                 const isGain = (s.pnlPct ?? 0) >= 0
+                const stockLink = s.stock_id ? `/stocks/${s.stock_id}` : `/stocks/live/${encodeURIComponent(s.symbol)}`
                 const signalCfg = {
                   BUY:  { bg:'rgba(34,197,94,0.12)',border:'rgba(34,197,94,0.3)',color:'#22C55E' },
                   HOLD: { bg:'rgba(245,158,11,0.12)',border:'rgba(245,158,11,0.3)',color:'#F59E0B' },
@@ -810,23 +876,17 @@ export default function PortfolioDetail() {
                   <div key={s.symbol} className="p-4 space-y-2">
                     <div className="flex items-center justify-between">
                       <div>
-                        <Link to={`/stocks/${s.stock_id}`} className="text-sm font-bold font-mono text-brand-400">{s.symbol}</Link>
+                        <Link to={stockLink} state={{ portfolioId: activePortfolioId }} className="text-sm font-bold font-mono text-brand-400">{s.symbol}</Link>
                         <div className="text-xs text-neutral-500 truncate">{s.name}</div>
                       </div>
                       <div className="text-right">
                         <div className="text-sm font-bold font-mono text-neutral-200">
                           {s.last !== null ? `₹${fmtINR(s.last)}` : '—'}
                         </div>
-                        {s.pnlPct !== null && (
-                          <span className={`text-2xs font-mono ${isGain ? 'text-gain-500' : 'text-loss-500'}`}>
-                            {isGain ? '▲' : '▼'}{Math.abs(s.pnlPct).toFixed(2)}%
-                          </span>
-                        )}
                       </div>
                     </div>
-                    <div className="grid grid-cols-3 gap-2 text-2xs">
+                    <div className="grid grid-cols-2 gap-2 text-2xs">
                       <div><span className="text-neutral-600">Qty</span><br/><span className="font-mono text-neutral-300">{s.qty}</span></div>
-                      <div><span className="text-neutral-600">Avg Buy</span><br/><span className="font-mono text-neutral-300">₹{fmtINR(s.avg)}</span></div>
                       <div><span className="text-neutral-600">P&L</span><br/>
                         <span className={`font-mono ${isGain?'text-gain-500':'text-loss-500'}`}>
                           ₹{fmtINR(Math.abs(s.pnl))}
@@ -883,7 +943,7 @@ export default function PortfolioDetail() {
                   </div>
                 }>
                   {activeTab === 'lr'      && <MLForecastTab lrData={lrData} loading={lrLoading} />}
-                  {activeTab === 'cluster' && <ClusterTab portfolioId={id} fetchFn={fetchPortfolioClusters} />}
+                  {activeTab === 'cluster' && <ClusterTab portfolioId={activePortfolioId} fetchFn={fetchPortfolioClusters} />}
                   {activeTab === 'growth'  && <GrowthTab growthData={growthData} loading={growthLoading} />}
                   {activeTab === 'summary' && <SummaryTab summaryData={summaryData} loading={summaryLoading} />}
                   {activeTab === 'reco'    && <RecommendTab recommendData={recommendData} loading={recommendLoading} onAdd={onAdd} />}
@@ -941,3 +1001,5 @@ export default function PortfolioDetail() {
     </>
   )
 }
+
+

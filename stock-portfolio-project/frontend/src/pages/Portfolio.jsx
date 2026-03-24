@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import {
   fetchPortfolio, createPortfolio, deletePortfolio,
-  fetchPortfolioRating, verifyMpin,
+  fetchPortfolioRating, verifyMpin, fetchRecommendedPortfolios,
 } from '../api/stocks.js'
 
 // ── Inline keyframes ──────────────────────────────────────────────────────────
@@ -276,7 +276,7 @@ function EmptyState({ onCreate }) {
 }
 
 // ── Portfolio Card ─────────────────────────────────────────────────────────────
-function PortfolioCard({ p, rating, onDelete }) {
+function PortfolioCard({ p, rating, onDelete, showDelete = true, viewTo = null, viewLabel = 'View Portfolio' }) {
   const pnl    = toFin(p.total_pnl)
   const pnlPct = toFin(p.total_pnl_pct)
   const value  = toFin(p.total_value)
@@ -290,17 +290,19 @@ function PortfolioCard({ p, rating, onDelete }) {
          style={{ background: '#0D1117', border: '1px solid #1E2530' }}>
 
       {/* Delete button — shows on hover */}
-      <button onClick={e => { e.preventDefault(); onDelete() }}
-        className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-xl opacity-0 group-hover:opacity-100 transition-all duration-200"
-        style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#EF4444' }}
-        title="Delete portfolio">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
-          <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
-      </button>
+      {showDelete && onDelete && (
+        <button onClick={e => { e.preventDefault(); onDelete() }}
+          className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-xl opacity-0 group-hover:opacity-100 transition-all duration-200"
+          style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#EF4444' }}
+          title="Delete portfolio">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
+            <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
+      )}
 
       {/* Top row: name + stock count */}
-      <div className="mb-3 pr-10">
+      <div className={`mb-3 ${showDelete && onDelete ? 'pr-10' : ''}`}>
         <div className="flex items-start justify-between gap-2 mb-0.5">
           <h3 className="text-base font-bold leading-snug" style={{ color: '#e2e8f0' }}>{p.name}</h3>
           {rating && (
@@ -386,10 +388,10 @@ function PortfolioCard({ p, rating, onDelete }) {
       )}
 
       {/* View button */}
-      <Link to={`/portfolio/${p.id}`}
+      <Link to={viewTo || `/portfolio/${p.id}`}
         className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl text-sm font-semibold text-white transition-all active:scale-95 hover:opacity-90"
         style={{ background: 'linear-gradient(135deg,#0c4a6e80,#0369a180)', border: '1px solid rgba(14,165,233,0.25)', color: '#38BDF8' }}>
-        View Portfolio
+        {viewLabel}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3.5 h-3.5">
           <path d="M9 18l6-6-6-6"/>
         </svg>
@@ -412,12 +414,73 @@ function SkeletonCard() {
   )
 }
 
+function splitRecommendedMarkets(markets) {
+  const allMarkets = Array.isArray(markets) ? markets : []
+  let indian = null
+  let global = null
+
+  for (const marketEntry of allMarkets) {
+    const marketName = String(marketEntry?.market || '').toLowerCase()
+    if (!indian && /(ind|india|nse|bse|\bin\b)/.test(marketName)) {
+      indian = marketEntry
+      continue
+    }
+    if (!global && /(global|us|usa|international|world)/.test(marketName)) {
+      global = marketEntry
+    }
+  }
+
+  if (!indian && allMarkets.length > 0) indian = allMarkets[0]
+  if (!global && allMarkets.length > 1) {
+    global = allMarkets.find((m) => m !== indian) || null
+  }
+
+  return { indian, global }
+}
+
+function RecommendedSectorCard({ sector }) {
+  return (
+    <div className="rounded-2xl p-4" style={{ background: '#0D1117', border: '1px solid #1E2530' }}>
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <h3 className="text-sm md:text-base font-bold" style={{ color: '#e2e8f0' }}>
+          {sector?.sector || 'Unknown Sector'}
+        </h3>
+        <span
+          className="text-2xs px-2 py-1 rounded-lg"
+          style={{ background: 'rgba(14,165,233,0.12)', border: '1px solid rgba(14,165,233,0.25)', color: '#38BDF8', fontSize: 10 }}
+        >
+          {sector?.count ?? 0} stocks
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {(sector?.stocks || []).map((stock) => (
+          <span
+            key={`${stock.symbol}-${stock.stock_name}`}
+            className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg"
+            style={{ background: '#151C26', border: '1px solid #1E2530', color: '#cbd5e1' }}
+          >
+            <span className="text-xs font-semibold">{stock.stock_name}</span>
+            <span className="text-2xs font-mono" style={{ color: '#64748b', fontSize: 10 }}>
+              {stock.symbol}
+            </span>
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function Portfolio() {
   const [items,       setItems]       = useState([])
   const [ratings,     setRatings]     = useState({})   // { [portfolioId]: ratingData }
   const [loading,     setLoading]     = useState(true)
   const [error,       setError]       = useState(null)
+  const [recommendedLoading, setRecommendedLoading] = useState(true)
+  const [recommendedError,   setRecommendedError]   = useState(null)
+  const [recommendedMarkets, setRecommendedMarkets] = useState([])
+  const [dashboardTab,       setDashboardTab]       = useState('new')
+  const [recommendedTab,     setRecommendedTab]     = useState('indian')
   const [createOpen,  setCreateOpen]  = useState(false)
   const [mpinOpen,    setMpinOpen]    = useState(false)
   const [pendingDel,  setPendingDel]  = useState(null)  // portfolioId to delete
@@ -441,7 +504,22 @@ export default function Portfolio() {
     finally { setLoading(false) }
   }
 
-  useEffect(() => { load() }, [])
+  async function loadRecommended() {
+    setRecommendedLoading(true); setRecommendedError(null)
+    try {
+      const data = await fetchRecommendedPortfolios()
+      setRecommendedMarkets(data?.markets || [])
+    } catch {
+      setRecommendedError('Failed to load recommended portfolios.')
+    } finally {
+      setRecommendedLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    load()
+    loadRecommended()
+  }, [])
 
   // ── Toast helper ────────────────────────────────────────────────────────────
   function showToast(msg, ok = true) {
@@ -473,8 +551,30 @@ export default function Portfolio() {
 
   // ── Totals ──────────────────────────────────────────────────────────────────
   const totalValue    = items.reduce((a, p) => a + (toFin(p.total_value) ?? 0), 0)
-  const totalPnl      = items.reduce((a, p) => a + (toFin(p.total_pnl)   ?? 0), 0)
-  const overallIsGain = totalPnl >= 0
+  const splitMarkets = splitRecommendedMarkets(recommendedMarkets)
+  const selectedRecommendedMarket = recommendedTab === 'indian' ? splitMarkets.indian : splitMarkets.global
+  const recommendedCards = (selectedRecommendedMarket?.sectors || []).map((sectorItem, index) => {
+    const marketLabel = String(selectedRecommendedMarket?.market || recommendedTab).toLowerCase()
+    const marketParam = encodeURIComponent(String(selectedRecommendedMarket?.market || recommendedTab))
+    const sectorParam = encodeURIComponent(String(sectorItem?.sector || `sector-${index}`))
+    const stockCount = Number(sectorItem?.count || 0)
+    const stars = Math.min(5, Math.max(1, Math.ceil(stockCount / 4)))
+    return {
+      p: {
+        id: `recommended-${recommendedTab}-${index}`,
+        name: `${sectorItem?.sector || 'Unknown Sector'} (${marketLabel} stock)`,
+        description: `Recommended ${marketLabel} stock basket`,
+        total_value: null,
+        total_pnl: 0,
+        total_pnl_pct: 0,
+        stock_count: stockCount,
+        top_sector: sectorItem?.sector || '',
+        sectors: [{ name: sectorItem?.sector || 'Sector', pct: 100 }],
+      },
+      rating: { stars },
+      viewTo: `/portfolio/recommended/${marketParam}/${sectorParam}`,
+    }
+  })
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -522,7 +622,7 @@ export default function Portfolio() {
               SUMMARY BAR
           ══════════════════════════════════════════════════════════ */}
           {!loading && items.length > 0 && (
-            <div className="grid grid-cols-3 gap-3 fade-up">
+            <div className="grid grid-cols-1 gap-3 fade-up max-w-sm">
               {[
                 {
                   label: 'Total Portfolios',
@@ -534,33 +634,6 @@ export default function Portfolio() {
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
                       <rect x="2" y="7" width="20" height="14" rx="2"/>
                       <path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/>
-                    </svg>
-                  ),
-                },
-                {
-                  label: 'Total Invested',
-                  value: fmtCompact(totalValue - totalPnl),
-                  accent: '#8B5CF6',
-                  bg: 'rgba(139,92,246,0.08)',
-                  border: 'rgba(139,92,246,0.2)',
-                  icon: (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
-                      <path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/>
-                    </svg>
-                  ),
-                },
-                {
-                  label: 'Overall Gain / Loss',
-                  value: `${overallIsGain ? '+' : ''}₹${fmtINR(totalPnl)}`,
-                  accent: overallIsGain ? '#22C55E' : '#EF4444',
-                  bg: overallIsGain ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
-                  border: overallIsGain ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)',
-                  icon: (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
-                      {overallIsGain
-                        ? <path d="M22 7l-9 9-4-4-7 7M22 7h-6M22 7v6" strokeLinecap="round" strokeLinejoin="round"/>
-                        : <path d="M22 17l-9-9-4 4-7-7M22 17h-6M22 17v-6" strokeLinecap="round" strokeLinejoin="round"/>
-                      }
                     </svg>
                   ),
                 },
@@ -580,6 +653,29 @@ export default function Portfolio() {
             </div>
           )}
 
+          <div className="rounded-2xl p-1.5 flex items-center gap-2 w-full md:w-fit" style={{ background: '#0D1117', border: '1px solid #1E2530' }}>
+            <button
+              onClick={() => setDashboardTab('recommended')}
+              className="px-4 py-2 rounded-xl text-xs md:text-sm font-semibold transition-all"
+              style={dashboardTab === 'recommended'
+                ? { background: 'linear-gradient(135deg,#0369a1,#0EA5E9)', color: '#fff' }
+                : { background: 'transparent', color: '#94a3b8' }}
+            >
+              Recommended Portfolios
+            </button>
+            <button
+              onClick={() => setDashboardTab('new')}
+              className="px-4 py-2 rounded-xl text-xs md:text-sm font-semibold transition-all"
+              style={dashboardTab === 'new'
+                ? { background: 'linear-gradient(135deg,#0369a1,#0EA5E9)', color: '#fff' }
+                : { background: 'transparent', color: '#94a3b8' }}
+            >
+              New Portfolios
+            </button>
+          </div>
+
+          {dashboardTab === 'new' && (
+            <>
           {/* Error */}
           {error && (
             <div className="flex items-center gap-3 px-4 py-3 rounded-xl fade-up"
@@ -609,6 +705,100 @@ export default function Portfolio() {
                   />
                 </div>
               ))}
+            </div>
+          )}
+            </>
+          )}
+
+          {dashboardTab === 'recommended' && (
+            <div className="space-y-4">
+              <div className="rounded-2xl p-4 md:p-5" style={{ background: '#0D1117', border: '1px solid #1E2530' }}>
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                  <div>
+                    <h2 className="text-base md:text-lg font-bold" style={{ color: '#e2e8f0' }}>Recommended Portfolios</h2>
+                    <p className="text-xs md:text-sm" style={{ color: '#64748b' }}>
+                      Stocks grouped by sector and market. Example: Cement and Construction Materials to ACC LTD.
+                    </p>
+                  </div>
+                  <div className="rounded-2xl p-1.5 flex items-center gap-1.5"
+                       style={{ background: 'linear-gradient(145deg,#070B14,#0B1220)', border: '1px solid #1E2530', boxShadow: 'inset 0 0 0 1px rgba(14,165,233,0.06)' }}>
+                    <button
+                      onClick={() => setRecommendedTab('indian')}
+                      className="group px-4 py-2 rounded-xl text-xs md:text-sm font-semibold transition-all duration-200 active:scale-95"
+                      style={recommendedTab === 'indian'
+                        ? {
+                          background: 'linear-gradient(135deg,#075985,#0EA5E9)',
+                          color: '#fff',
+                          boxShadow: '0 6px 20px rgba(14,165,233,0.35), inset 0 0 0 1px rgba(255,255,255,0.08)',
+                          transform: 'translateY(-1px)',
+                        }
+                        : { background: 'rgba(2,6,23,0.45)', color: '#94a3b8', border: '1px solid rgba(148,163,184,0.16)' }}
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: recommendedTab === 'indian' ? '#67E8F9' : '#475569' }} />
+                        Indian Market Portfolios
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => setRecommendedTab('global')}
+                      className="group px-4 py-2 rounded-xl text-xs md:text-sm font-semibold transition-all duration-200 active:scale-95"
+                      style={recommendedTab === 'global'
+                        ? {
+                          background: 'linear-gradient(135deg,#075985,#0EA5E9)',
+                          color: '#fff',
+                          boxShadow: '0 6px 20px rgba(14,165,233,0.35), inset 0 0 0 1px rgba(255,255,255,0.08)',
+                          transform: 'translateY(-1px)',
+                        }
+                        : { background: 'rgba(2,6,23,0.45)', color: '#94a3b8', border: '1px solid rgba(148,163,184,0.16)' }}
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: recommendedTab === 'global' ? '#67E8F9' : '#475569' }} />
+                        Global Market Portfolios
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
+                {recommendedError && (
+                  <div className="flex items-center gap-3 px-4 py-3 rounded-xl mb-4"
+                       style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                    <span style={{ color: '#EF4444' }}>! {recommendedError}</span>
+                    <button onClick={loadRecommended} className="ml-auto text-xs font-medium" style={{ color: '#94a3b8' }}>Retry</button>
+                  </div>
+                )}
+
+                {recommendedLoading ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {[1, 2, 3, 4].map(i => <SkeletonCard key={`recommended-${i}`} />)}
+                  </div>
+                ) : !selectedRecommendedMarket ? (
+                  <div className="rounded-xl px-4 py-5 text-sm" style={{ background: '#080C12', border: '1px solid #1E2530', color: '#94a3b8' }}>
+                    No recommended portfolios found for {recommendedTab === 'indian' ? 'Indian market' : 'Global market'}.
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-sm md:text-base font-semibold" style={{ color: '#cbd5e1' }}>
+                        {selectedRecommendedMarket.market} - {selectedRecommendedMarket.sector_count || 0} sectors
+                      </h3>
+                      <span className="text-xs" style={{ color: '#64748b' }}>
+                        {selectedRecommendedMarket.stock_count || 0} stocks
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {recommendedCards.map((entry) => (
+                        <PortfolioCard
+                          key={entry.p.id}
+                          p={entry.p}
+                          rating={entry.rating}
+                          showDelete={false}
+                          viewTo={entry.viewTo}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useLocation, useParams } from 'react-router-dom'
 import {
   Chart as ChartJS,
   LineElement, PointElement, LinearScale, CategoryScale,
@@ -221,6 +221,7 @@ function AddToPortfolioButton({ symbol, livePrice }) {
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function StockDetail() {
   const { id } = useParams()
+  const location = useLocation()
   const chartRef = useRef()
 
   // ── Core data ────────────────────────────────────────────────────────────
@@ -246,6 +247,8 @@ export default function StockDetail() {
   const [lrData,      setLrData]      = useState(null)
   const [logData,     setLogData]     = useState(null)
   const [mlLoading,   setMlLoading]   = useState(false)
+  const preferredMlPortId = Number(location.state?.portfolioId)
+  const hasPreferredMlPortId = Number.isFinite(preferredMlPortId) && preferredMlPortId > 0
 
   // ── Download ──────────────────────────────────────────────────────────────
   const [downloading, setDownloading] = useState(false)
@@ -286,10 +289,14 @@ export default function StockDetail() {
     fetchPortfolio()
       .then(d => {
         setPortfolios(d || [])
+        if (hasPreferredMlPortId) {
+          setMlPortId(preferredMlPortId)
+          return
+        }
         if (d?.length) setMlPortId(d[0].id)
       })
       .catch(() => {})
-  }, [])
+  }, [hasPreferredMlPortId, preferredMlPortId])
 
   // ── Load sentiment on demand ──────────────────────────────────────────────
   async function loadSentiment() {

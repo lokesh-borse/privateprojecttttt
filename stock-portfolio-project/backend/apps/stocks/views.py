@@ -3,12 +3,14 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from rest_framework.response import Response
 from django.db.models import Q
+from django.db.utils import OperationalError, ProgrammingError
 from django.http import HttpResponse
+from collections import defaultdict
 import csv
 import urllib.request
 import urllib.error
-from .models import Stock, StockUniverse
-from .serializers import StockSerializer, StockUniverseSerializer
+from .models import Stock, StockCatalog, StockUniverse
+from .serializers import StockSerializer, StockCatalogSerializer, StockUniverseSerializer
 from services.stock_service import get_live_quote, get_history, search_symbols, get_stock_profile
 
 class StockViewSet(viewsets.ModelViewSet):
@@ -27,6 +29,58 @@ def stocks_search(request):
     q = request.query_params.get('q', '')
     qs = Stock.objects.filter(Q(symbol__icontains=q) | Q(name__icontains=q))[:20]
     return Response(StockSerializer(qs, many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def stock_catalog_list(request):
+    market = (request.query_params.get('market') or '').strip()
+    qs = StockCatalog.objects.all()
+    if market:
+        qs = qs.filter(market__iexact=market)
+    return Response(StockCatalogSerializer(qs, many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def recommended_portfolios(request):
+    market_param = (request.query_params.get('market') or '').strip()
+    qs = StockCatalog.objects.all()
+    if market_param:
+        qs = qs.filter(market__iexact=market_param)
+
+    grouped = defaultdict(lambda: defaultdict(list))
+    for row in qs:
+        grouped[row.market][row.sector].append({
+            'stock_name': row.stock_name,
+            'symbol': row.symbol,
+            'sector': row.sector,
+            'market': row.market,
+        })
+
+    markets = []
+    for market_name in sorted(grouped.keys(), key=lambda m: m.lower()):
+        sector_items = grouped[market_name]
+        sectors = []
+        for sector_name in sorted(sector_items.keys(), key=lambda s: s.lower()):
+            stocks = sorted(sector_items[sector_name], key=lambda item: item['stock_name'].lower())
+            sectors.append({
+                'sector': sector_name,
+                'count': len(stocks),
+                'stocks': stocks,
+            })
+        markets.append({
+            'market': market_name,
+            'sector_count': len(sectors),
+            'stock_count': sum(s['count'] for s in sectors),
+            'sectors': sectors,
+        })
+
+    return Response({
+        'total_markets': len(markets),
+        'total_stocks': qs.count(),
+        'markets': markets,
+    })
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -66,14 +120,17 @@ def stock_universe(request):
     market = (request.query_params.get('market') or '').strip().upper()
     include_inactive = (request.query_params.get('include_inactive') or '').strip() in {'1', 'true', 'True'}
 
-    qs = StockUniverse.objects.all()
-    if market in {StockUniverse.MARKET_IN, StockUniverse.MARKET_US}:
-        qs = qs.filter(market=market)
-    if not include_inactive:
-        qs = qs.filter(is_active=True)
-    qs = qs.order_by('market', 'display_order', 'symbol')
+    try:
+        qs = StockUniverse.objects.all()
+        if market in {StockUniverse.MARKET_IN, StockUniverse.MARKET_US}:
+            qs = qs.filter(market=market)
+        if not include_inactive:
+            qs = qs.filter(is_active=True)
+        qs = qs.order_by('market', 'display_order', 'symbol')
+        data = StockUniverseSerializer(qs, many=True).data
+    except (OperationalError, ProgrammingError):
+        data = []
 
-    data = StockUniverseSerializer(qs, many=True).data
     return Response({
         'count': len(data),
         'results': data,
@@ -81,7 +138,7 @@ def stock_universe(request):
     })
 
 
-# ─── SENTIMENT ANALYSIS ───────────────────────────────────────────────────────
+# â”€â”€â”€ SENTIMENT ANALYSIS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 # Simple keyword-based polarity sentiment (no external NLP library)
 POSITIVE_WORDS = {
@@ -171,7 +228,7 @@ def stock_sentiment(request):
     })
 
 
-# ─── 5-YEAR PERFORMANCE ───────────────────────────────────────────────────────
+# â”€â”€â”€ 5-YEAR PERFORMANCE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -204,7 +261,7 @@ def stock_performance_5y(request):
     })
 
 
-# ─── DOWNLOAD STOCK SUMMARY ───────────────────────────────────────────────────
+# â”€â”€â”€ DOWNLOAD STOCK SUMMARY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -250,13 +307,13 @@ def stock_summary_download(request):
     return response
 
 
-# ─── GEMINI AI PROXY ──────────────────────────────────────────────────────────
+# â”€â”€â”€ GEMINI AI PROXY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def gemini_proxy(request):
     """
-    Proxy POST /api/stocks/gemini/ → Gemini REST API.
+    Proxy POST /api/stocks/gemini/ â†’ Gemini REST API.
     Body: { "contents": [...], "system_prompt": "..." }
     Returns: { "reply": "..." }
     """
@@ -324,3 +381,5 @@ def gemini_proxy(request):
         return Response({'detail': f'Gemini error (HTTP {e.code})', 'error': body}, status=status.HTTP_502_BAD_GATEWAY)
     except Exception as e:
         return Response({'detail': str(e)}, status=status.HTTP_502_BAD_GATEWAY)
+
+

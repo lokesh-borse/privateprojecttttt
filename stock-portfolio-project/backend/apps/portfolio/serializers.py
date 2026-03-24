@@ -1,7 +1,6 @@
 from rest_framework import serializers
 from .models import Portfolio, PortfolioStock
 from apps.stocks.models import Stock
-from services.stock_service import get_live_quote
 
 class PortfolioStockSerializer(serializers.ModelSerializer):
     stock_id = serializers.IntegerField(source='stock.id', read_only=True)
@@ -22,19 +21,10 @@ class PortfolioSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'description', 'created_at', 'updated_at', 'stocks', 'total_value']
 
     def get_total_value(self, obj):
-        if not hasattr(self, '_live_price_cache'):
-            self._live_price_cache = {}
-
         total = 0
         for h in obj.holdings.all():
             qty = h.quantity or 0
-            symbol = h.stock.symbol
-
-            if symbol not in self._live_price_cache:
-                quote = get_live_quote(symbol)
-                self._live_price_cache[symbol] = quote.get('price') if quote else None
-            latest_price = self._live_price_cache.get(symbol)
-
+            latest_price = None
             if latest_price is None:
                 latest_stored = h.stock.prices.order_by('-date').first()
                 if latest_stored:

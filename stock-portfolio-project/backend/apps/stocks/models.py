@@ -53,3 +53,23 @@ class StockUniverse(models.Model):
 
     def __str__(self):
         return f"{self.symbol} ({self.market})"
+
+
+class StockCatalog(models.Model):
+    stock_name = models.CharField(max_length=255)
+    market = models.CharField(max_length=64)
+    symbol = models.CharField(max_length=32)
+    sector = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('symbol', 'market')
+        indexes = [
+            models.Index(fields=['market', 'sector']),
+            models.Index(fields=['symbol']),
+        ]
+        ordering = ['market', 'sector', 'stock_name']
+
+    def __str__(self):
+        return f"{self.stock_name} ({self.symbol}) - {self.market}"

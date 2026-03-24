@@ -1,7 +1,7 @@
-﻿import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import MarketSection from '../components/stocks/MarketSection'
 import AddToPortfolioModal from '../components/stocks/AddToPortfolioModal'
-import { fetchStockUniverse } from '../api/stocks'
+import { fetchRecommendedPortfolios, fetchStockUniverse } from '../api/stocks'
 
 function TabPill({ active, onClick, icon, label, count }) {
   return (
@@ -28,42 +28,79 @@ export default function Stocks() {
   const [modalStock, setModalStock] = useState(null)
   const [indianStocks, setIndianStocks] = useState([])
   const [globalStocks, setGlobalStocks] = useState([])
-  const [loadingUniverse, setLoadingUniverse] = useState(true)
-  const [universeError, setUniverseError] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
 
   const handleAdd = (stock) => setModalStock(stock)
   const handleCloseModal = () => setModalStock(null)
 
   useEffect(() => {
-    let mounted = true
+    let isMounted = true
 
-    async function loadUniverse() {
-      setLoadingUniverse(true)
-      setUniverseError('')
+    const normalize = (value) => String(value || '').trim().toUpperCase()
+    const unique = (items) => Array.from(new Set(items.map(normalize).filter(Boolean)))
+    const byMarketKeyword = (marketValue) => {
+      const v = String(marketValue || '').toLowerCase()
+      if (v === 'in' || v.includes('india')) return 'IN'
+      if (v === 'us' || v.includes('global') || v.includes('usa') || v.includes('united states')) return 'US'
+      return null
+    }
+
+    async function loadSymbols() {
+      setLoading(true)
+      setLoadError('')
       try {
-        const [inRes, usRes] = await Promise.all([
+        const [inUniverse, usUniverse] = await Promise.all([
           fetchStockUniverse('IN'),
           fetchStockUniverse('US'),
         ])
-        if (!mounted) return
-        setIndianStocks(inRes?.symbols || [])
-        setGlobalStocks(usRes?.symbols || [])
+
+        let inSymbols = unique(inUniverse?.symbols || [])
+        let usSymbols = unique(usUniverse?.symbols || [])
+
+        if (inSymbols.length === 0 && usSymbols.length === 0) {
+          const recommended = await fetchRecommendedPortfolios()
+          const markets = Array.isArray(recommended?.markets) ? recommended.markets : []
+          const inFallback = []
+          const usFallback = []
+
+          for (const marketItem of markets) {
+            const mapped = byMarketKeyword(marketItem?.market)
+            if (!mapped) continue
+            const sectors = Array.isArray(marketItem?.sectors) ? marketItem.sectors : []
+            for (const sector of sectors) {
+              const stocks = Array.isArray(sector?.stocks) ? sector.stocks : []
+              for (const stock of stocks) {
+                if (mapped === 'IN') inFallback.push(stock?.symbol)
+                if (mapped === 'US') usFallback.push(stock?.symbol)
+              }
+            }
+          }
+
+          inSymbols = unique(inFallback)
+          usSymbols = unique(usFallback)
+        }
+
+        if (!isMounted) return
+        setIndianStocks(inSymbols)
+        setGlobalStocks(usSymbols)
       } catch {
-        if (!mounted) return
-        setUniverseError('Unable to load stock universe from server.')
+        if (!isMounted) return
+        setLoadError('Could not load symbols right now. Please try refreshing.')
+        setIndianStocks([])
+        setGlobalStocks([])
       } finally {
-        if (mounted) setLoadingUniverse(false)
+        if (isMounted) setLoading(false)
       }
     }
 
-    loadUniverse()
-    return () => { mounted = false }
+    loadSymbols()
+    return () => { isMounted = false }
   }, [])
 
   return (
     <div className="min-h-screen bg-[#0f1117] text-slate-100">
       <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8 pt-24">
-
         <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
           <div>
             <div className="flex items-center gap-2 mb-1">
@@ -71,7 +108,7 @@ export default function Stocks() {
               <h1 className="text-2xl font-bold text-slate-100 tracking-tight">Market Explorer</h1>
             </div>
             <p className="text-sm text-slate-400 ml-3">
-              Browse and add stocks from Indian and Global markets to your portfolio
+              Browse and add stocks from curated Indian and Global market lists
             </p>
           </div>
 
@@ -80,7 +117,7 @@ export default function Stocks() {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
             </span>
-            <span className="text-xs font-medium text-emerald-400">Universe Data</span>
+            <span className="text-xs font-medium text-emerald-400">Curated Symbols</span>
           </div>
         </div>
 
@@ -101,16 +138,11 @@ export default function Stocks() {
           />
         </div>
 
-        {universeError && (
-          <div className="mb-4 px-4 py-3 rounded-lg border border-red-500/30 bg-red-500/10 text-red-300 text-sm">
-            {universeError}
-          </div>
+        {loading && (
+          <div className="mb-6 text-xs text-cyan-400/90">Loading curated symbols...</div>
         )}
-
-        {loadingUniverse && (
-          <div className="mb-6 px-4 py-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5 text-cyan-300 text-sm">
-            Loading stock universe...
-          </div>
+        {!loading && loadError && (
+          <div className="mb-6 text-xs text-rose-400">{loadError}</div>
         )}
 
         <div className="h-px w-full bg-gradient-to-r from-cyan-500/20 via-white/5 to-transparent mb-8" />
@@ -141,8 +173,8 @@ export default function Stocks() {
 
         <div className="mt-12 flex flex-wrap gap-4 justify-center">
           {[
-            { icon: 'FAST', label: 'Fast loading', sub: 'stock_universe only' },
-            { icon: 'LIST', label: 'Universe symbols', sub: 'market segmented' },
+            { icon: 'FAST', label: 'Fast loading', sub: 'local list' },
+            { icon: 'LIST', label: 'Curated symbols', sub: 'market segmented' },
             { icon: 'RANGE', label: '52-week range', sub: 'if available' },
             { icon: 'PORT', label: 'Portfolio ready', sub: 'add in one click' },
           ].map((item) => (

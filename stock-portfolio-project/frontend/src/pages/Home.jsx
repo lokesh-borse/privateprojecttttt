@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
 import api from '../api/axios.js'
-import { fetchStockUniverse } from '../api/stocks.js'
 
 // ── Inline CSS (keyframes + ticker) ──────────────────────────────────────────
 const STYLES = `
@@ -111,9 +110,9 @@ const BASE_SYSTEM_PROMPT = `You are an expert AI Stock Market Assistant embedded
 
 You have deep knowledge of the following:
 
-INDIAN STOCKS (NSE): Loaded dynamically from stock_universe table.
+INDIAN STOCKS (NSE): Search and analyze via live market endpoints.
 
-GLOBAL STOCKS (US): Loaded dynamically from stock_universe table.
+GLOBAL STOCKS (US): Search and analyze via live market endpoints.
 
 CRYPTO: BTC-USD, ETH-USD, BNB-USD, SOL-USD, XRP-USD, ADA-USD, DOGE-USD, DOT-USD, MATIC-USD, LTC-USD, TRX-USD, AVAX-USD, SHIB-USD, LINK-USD, ATOM-USD, XLM-USD, ETC-USD, ICP-USD, FIL-USD, APT-USD
 
@@ -132,18 +131,6 @@ STRICT RULES:
 6. Use Indian Rupee (₹) for NSE/BSE stocks and USD ($) for US stocks
 7. Format responses cleanly — use bullet points for lists, bold for stock symbols, and keep it conversational
 8. Never make absolute buy/sell guarantees — always recommend consulting a SEBI registered financial advisor for actual investment decisions`
-
-function buildSystemPrompt(indianSymbols = [], globalSymbols = []) {
-  const indianLine = indianSymbols.length
-    ? `INDIAN STOCKS (NSE): ${indianSymbols.join(', ')}`
-    : 'INDIAN STOCKS (NSE): Loaded dynamically from stock_universe table.'
-  const globalLine = globalSymbols.length
-    ? `GLOBAL STOCKS (US): ${globalSymbols.join(', ')}`
-    : 'GLOBAL STOCKS (US): Loaded dynamically from stock_universe table.'
-  return BASE_SYSTEM_PROMPT
-    .replace('INDIAN STOCKS (NSE): Loaded dynamically from stock_universe table.', indianLine)
-    .replace('GLOBAL STOCKS (US): Loaded dynamically from stock_universe table.', globalLine)
-}
 
 // ── Simple markdown renderer ──────────────────────────────────────────────────
 function renderMarkdown(text) {
@@ -221,7 +208,7 @@ function ChatbotWidget() {
   ])
   const [input, setInput] = useState('')
   const [typing, setTyping] = useState(false)
-  const [systemPrompt, setSystemPrompt] = useState(BASE_SYSTEM_PROMPT)
+  const systemPrompt = BASE_SYSTEM_PROMPT
   // Gemini conversation history: [{role:'user',parts:[{text}]},{role:'model',parts:[{text}]}]
   const [history, setHistory] = useState([])
   const bottomRef = useRef(null)
@@ -230,27 +217,6 @@ function ChatbotWidget() {
   useEffect(() => {
     if (open) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, open, typing])
-
-  useEffect(() => {
-    let mounted = true
-    async function loadUniversePrompt() {
-      try {
-        const [inRes, usRes] = await Promise.all([
-          fetchStockUniverse('IN'),
-          fetchStockUniverse('US'),
-        ])
-        if (!mounted) return
-        const inSymbols = inRes?.symbols || []
-        const usSymbols = usRes?.symbols || []
-        setSystemPrompt(buildSystemPrompt(inSymbols, usSymbols))
-      } catch {
-        if (!mounted) return
-        setSystemPrompt(BASE_SYSTEM_PROMPT)
-      }
-    }
-    loadUniversePrompt()
-    return () => { mounted = false }
-  }, [])
 
   async function sendMessage(text) {
     const trimmed = text.trim()
@@ -916,3 +882,5 @@ export default function Home() {
     </>
   )
 }
+
+

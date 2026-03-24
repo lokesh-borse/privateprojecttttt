@@ -1,11 +1,10 @@
 import React, { memo } from 'react'
 
 // live_detail response shape:
-// { symbol, name, sector, industry, market_cap, pe_ratio, dividend_yield,
-//   "52_week_high", "52_week_low",   ← from get_stock_profile
+// { symbol, name, sector, industry, market_cap, dividend_yield,
 //   price, volume, change            ← from get_live_quote
 // }
-// OHLC (open/high/low/close as daily) is NOT in live_detail — we show price + 52W range.
+// OHLC (open/high/low/close as daily) is NOT in live_detail.
 
 const fmt = (n, digits = 2) =>
   n != null && !isNaN(n)
@@ -18,27 +17,6 @@ const pct = (n) => {
   return { text: `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`, pos: v >= 0 }
 }
 
-function RangeBar({ low, high, current }) {
-  if (low == null || high == null || high === low || current == null) return null
-  const pos = Math.min(100, Math.max(0, ((current - low) / (high - low)) * 100))
-  return (
-    <div className="flex items-center gap-1.5 w-full">
-      <span className="text-[10px] text-slate-500 font-mono w-14 text-right shrink-0">{fmt(low, 0)}</span>
-      <div className="relative flex-1 h-1.5 rounded-full bg-slate-700/60">
-        <div
-          className="absolute h-full rounded-full bg-gradient-to-r from-cyan-600/50 to-cyan-400"
-          style={{ width: `${pos}%` }}
-        />
-        <div
-          className="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-cyan-400 border-2 border-slate-900 shadow-md shadow-cyan-500/30"
-          style={{ left: `calc(${pos}% - 5px)` }}
-        />
-      </div>
-      <span className="text-[10px] text-slate-500 font-mono w-14 shrink-0">{fmt(high, 0)}</span>
-    </div>
-  )
-}
-
 function StockCard({ stock, market, onAdd }) {
   const {
     symbol,
@@ -47,12 +25,7 @@ function StockCard({ stock, market, onAdd }) {
     price,
     change,
     volume,
-    pe_ratio,
   } = stock
-
-  // Handle both possible key formats for 52-week range
-  const week52High = stock['52_week_high'] ?? stock.week_52_high ?? null
-  const week52Low  = stock['52_week_low']  ?? stock.week_52_low  ?? null
 
   const currency = market === 'IN' ? '₹' : '$'
   const chg = pct(change)
@@ -113,31 +86,6 @@ function StockCard({ stock, market, onAdd }) {
           )}
         </div>
       </div>
-
-      {/* Stats row */}
-      <div className="grid grid-cols-3 gap-1.5">
-        {[
-          ['52W High',  week52High  != null ? `${currency}${fmt(week52High, 0)}` : '—'],
-          ['52W Low',   week52Low   != null ? `${currency}${fmt(week52Low, 0)}`  : '—'],
-          ['P/E',       pe_ratio    != null ? fmt(pe_ratio, 1)                   : '—'],
-        ].map(([label, val]) => (
-          <div key={label} className="flex flex-col items-center bg-slate-800/40 rounded-lg px-1.5 py-1.5">
-            <span className="text-[9px] text-slate-500 font-mono mb-0.5">{label}</span>
-            <span className="text-[11px] text-slate-300 font-mono font-medium">{val}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* 52W Range bar */}
-      {(week52High != null && week52Low != null) && (
-        <div className="pt-0.5">
-          <div className="flex justify-between text-[9px] text-slate-500 mb-1.5 font-mono">
-            <span>52-Week Range</span>
-            <span className="text-cyan-500/70">{displayPrice != null ? `${currency}${fmt(displayPrice)} current` : ''}</span>
-          </div>
-          <RangeBar low={week52Low} high={week52High} current={displayPrice} />
-        </div>
-      )}
 
       {/* Add button */}
       <button
